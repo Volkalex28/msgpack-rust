@@ -671,6 +671,7 @@ fn assert_roundtrips_config<T, CSF, SC, CDF, DC>(
         Deserializer<ReadReader<&[u8]>, DefaultConfig>,
     ) -> Deserializer<ReadReader<&[u8]>, DC>,
     DC: SerializerConfig,
+    DC::ExtBuffer: for<'a> Deserialize<'a>
 {
     let mut serializer = config_serializer(Serializer::new(Vec::new()));
     if let Err(e) = val.serialize(&mut serializer) {

@@ -93,6 +93,25 @@ pub mod encode;
 /// ```
 pub const MSGPACK_EXT_STRUCT_NAME: &str = "_ExtStruct";
 
+/// Wrapper for MessagePack extensions
+/// 
+/// Type `B` should serialize/deserialize as binary data
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename = "_ExtStruct")]
+pub struct Ext<B>((i8, B));
+
+impl<B> Ext<B> {
+    /// Constructs a new `Ext` from tag and binary data.
+    pub fn new(tag: i8, data: B) -> Self {
+        Self((tag, data))
+    }
+
+    /// Take tag and binary data from the `Ext`
+    pub fn take(self) -> (i8, B) {
+        self.0
+    }
+}
+
 /// Helper that allows both to encode and decode strings no matter whether they contain valid or
 /// invalid UTF-8.
 ///

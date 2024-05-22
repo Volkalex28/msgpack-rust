@@ -16,7 +16,7 @@ tag-prefix = "{{crate_name}}/"
 
 [dependencies]
 byteorder = "1.4.3"
-serde = "1.0.136"
+serde = { version = "1.0.136", features = ["derive"] }
 rmp = { version = "0.8.11", path = "../rmp" }
 
 [dev-dependencies]

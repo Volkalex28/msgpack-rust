@@ -1,8 +1,10 @@
 //! Change MessagePack behavior with configuration wrappers.
-use rmp::encode;
-use serde::{Serialize, Serializer};
+use std::marker::PhantomData;
 
-use crate::encode::{Error, UnderlyingWrite};
+use rmp::{encode as rmp_encode, Marker};
+use serde::{Serialize, Serializer, Deserialize, Deserializer};
+
+use crate::{Ext, encode::{self, UnderlyingWrite}, decode};
 
 /// Represents configuration that dicatates what the serializer does.
 ///
@@ -13,24 +15,27 @@ pub trait SerializerConfig: sealed::SerializerConfig {}
 impl<T: sealed::SerializerConfig> SerializerConfig for T {}
 
 mod sealed {
-    use serde::{Serialize, Serializer};
+    use rmp::Marker;
+    use serde::{Serialize, Serializer, Deserialize, Deserializer};
 
-    use crate::encode::{Error, UnderlyingWrite};
+    use crate::{Ext, encode::{self, UnderlyingWrite}, decode};
 
     /// This is the inner trait - the real SerializerConfig.
     ///
     /// This hack disallows external implementations and usage of SerializerConfig and thus
     /// allows us to change SerializerConfig methods freely without breaking backwards compatibility.
     pub trait SerializerConfig: Copy {
-        fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), Error>
-        where
-            S: UnderlyingWrite,
-            for<'a> &'a mut S: Serializer<Ok = (), Error = Error>;
+        type ExtBuffer;
 
-        fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), Error>
+        fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
         where
             S: UnderlyingWrite,
-            for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+            for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>;
+
+        fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error>
+        where
+            S: UnderlyingWrite,
+            for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
             T: ?Sized + Serialize;
 
         /// Encodes an enum variant ident (id or name) according to underlying writer.
@@ -40,14 +45,35 @@ mod sealed {
             ser: &mut S,
             variant_index: u32,
             variant: &'static str,
-        ) -> Result<(), Error>
+        ) -> Result<(), encode::Error>
         where
             S: UnderlyingWrite,
-            for<'a> &'a mut S: Serializer<Ok = (), Error = Error>;
+            for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>;
 
         /// Determines the value of `Serializer::is_human_readable` and
         /// `Deserializer::is_human_readable`.
         fn is_human_readable() -> bool;
+
+        #[inline(always)]
+        fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error>
+        where
+            S: UnderlyingWrite,
+            Self::ExtBuffer: Serialize,
+            for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error> 
+        {
+            let _ = (ser, ext);
+            Ok(())
+        }
+
+        #[inline(always)]
+        fn try_read_ext<'de, D>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error>
+        where
+            Self::ExtBuffer: Deserialize<'de>,
+            for<'a> &'a mut D: Deserializer<'de, Error = decode::Error> 
+        {
+            _ = (der, marker);
+            Ok(None)
+        }
     }
 }
 
@@ -63,21 +89,23 @@ mod sealed {
 pub struct DefaultConfig;
 
 impl sealed::SerializerConfig for DefaultConfig {
-    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), Error>
+    type ExtBuffer = ();
+
+    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
     {
-        encode::write_array_len(ser.get_mut(), len as u32)?;
+        rmp_encode::write_array_len(ser.get_mut(), len as u32)?;
 
         Ok(())
     }
 
     #[inline]
-    fn write_struct_field<S, T>(ser: &mut S, _key: &'static str, value: &T) -> Result<(), Error>
+    fn write_struct_field<S, T>(ser: &mut S, _key: &'static str, value: &T) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
         T: ?Sized + Serialize,
     {
         value.serialize(ser)
@@ -88,10 +116,10 @@ impl sealed::SerializerConfig for DefaultConfig {
         ser: &mut S,
         _variant_index: u32,
         variant: &'static str,
-    ) -> Result<(), Error>
+    ) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
     {
         ser.serialize_str(variant)
     }
@@ -124,23 +152,25 @@ impl<C> sealed::SerializerConfig for StructMapConfig<C>
 where
     C: sealed::SerializerConfig,
 {
-    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), Error>
+    type ExtBuffer = C::ExtBuffer;
+    
+    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
     {
-        encode::write_map_len(ser.get_mut(), len as u32)?;
+        rmp_encode::write_map_len(ser.get_mut(), len as u32)?;
 
         Ok(())
     }
 
-    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), Error>
+    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
         T: ?Sized + Serialize,
     {
-        encode::write_str(ser.get_mut(), key)?;
+        rmp_encode::write_str(ser.get_mut(), key)?;
         value.serialize(ser)
     }
 
@@ -149,10 +179,10 @@ where
         ser: &mut S,
         variant_index: u32,
         variant: &'static str,
-    ) -> Result<(), Error>
+    ) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
     {
         C::write_variant_ident(ser, variant_index, variant)
     }
@@ -161,9 +191,28 @@ where
     fn is_human_readable() -> bool {
         C::is_human_readable()
     }
+
+    #[inline]
+    fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error>
+    where
+        S: UnderlyingWrite,
+        Self::ExtBuffer: Serialize,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error> 
+    {
+        C::write_ext(ser, ext)
+    }
+
+    #[inline(always)]
+    fn try_read_ext<'de, D>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error>
+    where
+        Self::ExtBuffer: Deserialize<'de>,
+        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error> 
+    {
+        C::try_read_ext(der, marker)
+    }
 }
 
-/// Config wrapper that overrides struct serlization by packing as a tuple without field
+/// Config wrapper that overrides struct serialization by packing as a tuple without field
 /// names.
 #[derive(Copy, Clone, Debug)]
 pub struct StructTupleConfig<C>(C);
@@ -180,21 +229,23 @@ impl<C> sealed::SerializerConfig for StructTupleConfig<C>
 where
     C: sealed::SerializerConfig,
 {
-    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), Error>
+    type ExtBuffer = C::ExtBuffer;
+    
+    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
     {
-        encode::write_array_len(ser.get_mut(), len as u32)?;
+        rmp_encode::write_array_len(ser.get_mut(), len as u32)?;
 
         Ok(())
     }
 
     #[inline]
-    fn write_struct_field<S, T>(ser: &mut S, _key: &'static str, value: &T) -> Result<(), Error>
+    fn write_struct_field<S, T>(ser: &mut S, _key: &'static str, value: &T) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
         T: ?Sized + Serialize,
     {
         value.serialize(ser)
@@ -205,10 +256,10 @@ where
         ser: &mut S,
         variant_index: u32,
         variant: &'static str,
-    ) -> Result<(), Error>
+    ) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
     {
         C::write_variant_ident(ser, variant_index, variant)
     }
@@ -216,6 +267,25 @@ where
     #[inline(always)]
     fn is_human_readable() -> bool {
         C::is_human_readable()
+    }
+
+    #[inline]
+    fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error>
+    where
+        S: UnderlyingWrite,
+        Self::ExtBuffer: Serialize,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error> 
+    {
+        C::write_ext(ser, ext)
+    }
+
+    #[inline(always)]
+    fn try_read_ext<'de, D>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error>
+    where
+        Self::ExtBuffer: Deserialize<'de>,
+        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error> 
+    {
+        C::try_read_ext(der, marker)
     }
 }
 
@@ -236,20 +306,22 @@ impl<C> sealed::SerializerConfig for HumanReadableConfig<C>
 where
     C: sealed::SerializerConfig,
 {
+    type ExtBuffer = C::ExtBuffer;
+    
     #[inline]
-    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), Error>
+    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
     {
         C::write_struct_len(ser, len)
     }
 
     #[inline]
-    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), Error>
+    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
         T: ?Sized + Serialize,
     {
         C::write_struct_field(ser, key, value)
@@ -260,10 +332,10 @@ where
         ser: &mut S,
         variant_index: u32,
         variant: &'static str,
-    ) -> Result<(), Error>
+    ) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
     {
         C::write_variant_ident(ser, variant_index, variant)
     }
@@ -271,6 +343,25 @@ where
     #[inline(always)]
     fn is_human_readable() -> bool {
         true
+    }
+
+    #[inline]
+    fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error>
+    where
+        S: UnderlyingWrite,
+        Self::ExtBuffer: Serialize,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error> 
+    {
+        C::write_ext(ser, ext)
+    }
+
+    #[inline(always)]
+    fn try_read_ext<'de, D>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error>
+    where
+        Self::ExtBuffer: Deserialize<'de>,
+        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error> 
+    {
+        C::try_read_ext(der, marker)
     }
 }
 
@@ -291,20 +382,22 @@ impl<C> sealed::SerializerConfig for BinaryConfig<C>
 where
     C: sealed::SerializerConfig,
 {
+    type ExtBuffer = C::ExtBuffer;
+    
     #[inline]
-    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), Error>
+    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
     {
         C::write_struct_len(ser, len)
     }
 
     #[inline]
-    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), Error>
+    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
         T: ?Sized + Serialize,
     {
         C::write_struct_field(ser, key, value)
@@ -315,10 +408,10 @@ where
         ser: &mut S,
         variant_index: u32,
         variant: &'static str,
-    ) -> Result<(), Error>
+    ) -> Result<(), encode::Error>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
     {
         C::write_variant_ident(ser, variant_index, variant)
     }
@@ -326,5 +419,119 @@ where
     #[inline(always)]
     fn is_human_readable() -> bool {
         false
+    }
+
+    #[inline]
+    fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error>
+    where
+        S: UnderlyingWrite,
+        Self::ExtBuffer: Serialize,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error> 
+    {
+        C::write_ext(ser, ext)
+    }
+
+    #[inline(always)]
+    fn try_read_ext<'de, D>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error>
+    where
+        Self::ExtBuffer: Deserialize<'de>,
+        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error> 
+    {
+        C::try_read_ext(der, marker)
+    }
+}
+
+/// Config wrapper that overrides `SerializerConfig::write_ext` and
+/// `SerializerConfig::call_if_ext``.
+#[derive(Debug)]
+pub struct ExtConfig<C, B>(C, PhantomData<fn() -> B>);
+
+impl<C, B> ExtConfig<C, B> {
+    /// Creates a `ExtConfig` inheriting unchanged configuration options from the given configuration.
+    #[inline(always)]
+    pub fn new(inner: C) -> Self {
+        Self(inner, Default::default())
+    }
+}
+
+impl<C: Copy, B> Copy for ExtConfig<C, B> where PhantomData<fn() -> B>: Copy {}
+impl<C: Clone, B> Clone for ExtConfig<C, B> where PhantomData<fn() -> B>: Clone {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), Default::default())
+    }
+}
+
+impl<C, B> sealed::SerializerConfig for ExtConfig<C, B>
+where
+    C: sealed::SerializerConfig,
+{
+    type ExtBuffer = B;
+
+    #[inline(always)]
+    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
+    where
+        S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    {
+        C::write_struct_len(ser, len)
+    }
+
+    #[inline(always)]
+    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error>
+    where
+        S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+        T: ?Sized + Serialize,
+    {
+        C::write_struct_field(ser, key, value)
+    }
+
+    #[inline(always)]
+    fn write_variant_ident<S>(
+        ser: &mut S,
+        variant_index: u32,
+        variant: &'static str,
+    ) -> Result<(), encode::Error>
+    where
+        S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    {
+        C::write_variant_ident(ser, variant_index, variant)
+    }
+
+    #[inline(always)]
+    fn is_human_readable() -> bool {
+        C::is_human_readable()
+    }
+
+    #[inline]
+    fn write_ext<S>(ser: &mut S, ext: &Ext<B>) -> Result<(), encode::Error>
+    where
+        B: Serialize,
+        S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error> 
+    {
+        ext.serialize(ser)
+    }
+
+    #[inline(always)]
+    fn try_read_ext<'de, D>(der: &mut D, marker: Marker) -> Result<Option<Ext<B>>, decode::Error>
+    where
+        B: Deserialize<'de>,
+        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error> 
+    {
+        if matches!(marker, 
+            Marker::FixExt1 |
+            Marker::FixExt2 |
+            Marker::FixExt4 |
+            Marker::FixExt8 |
+            Marker::FixExt16 |
+            Marker::Ext8 |
+            Marker::Ext16 |
+            Marker::Ext32
+        ) {
+            return Ext::deserialize(der).map(Some)
+        }
+        Ok(None)
     }
 }

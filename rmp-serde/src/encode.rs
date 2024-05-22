@@ -16,9 +16,9 @@ use rmp::{encode, Marker};
 
 use crate::config::{
     BinaryConfig, DefaultConfig, HumanReadableConfig, SerializerConfig, StructMapConfig,
-    StructTupleConfig
+    StructTupleConfig, ExtConfig
 };
-use crate::MSGPACK_EXT_STRUCT_NAME;
+use crate::{MSGPACK_EXT_STRUCT_NAME, Ext};
 
 /// This type represents all possible errors that can occur when serializing or
 /// deserializing MessagePack data.
@@ -193,6 +193,19 @@ impl<'a, W: Write + 'a, C: SerializerConfig> Serializer<W, C> {
     }
 }
 
+impl<'a, W: Write + 'a, C: SerializerConfig> Serializer<W, C> {    
+    /// Serializing `Ext` data
+    /// 
+    /// Type `B` should serialize as binary data
+    #[inline]
+    pub fn write_ext(&mut self, ext: &Ext<C::ExtBuffer>) -> Result<(), Error>
+    where 
+        C::ExtBuffer: Serialize 
+    {
+        C::write_ext(self, ext)
+    }
+}
+
 impl<W: Write, C> Serializer<W, C> {
     /// Consumes this serializer returning the new one, which will serialize structs as a map.
     ///
@@ -252,6 +265,44 @@ impl<W: Write, C> Serializer<W, C> {
             wr,
             depth,
             config: BinaryConfig::new(config),
+        }
+    }
+
+    /// Consumes this serializer returning the new one, which can write `Ext` in any place.
+    ///
+    /// This is primarily useful if you need to write `Ext` before serialization to save some data.
+    /// 
+    /// Example:
+    /// ``` ignore
+    /// use rmp_serde::{Ext, Serializer, config::{ExtConfig, SerializerConfig}};
+    /// use std::io::Write;
+    /// 
+    /// struct Type;
+    /// 
+    /// fn write_ext<'s, S: serde::Serializer>(
+    ///     ser: &'s mut S, 
+    ///     call: fn(&'s mut Serializer<impl Write, ExtConfig<impl SerializerConfig>>) -> Result<S::Ok, S::Error>
+    /// ) -> Result<S::Ok, S::Error> {
+    ///     // implementation
+    /// }
+    /// 
+    /// impl serde::Serialize for Type {
+    ///     fn serialiize<S: serde::Serializer>(mut ser: S, val: &Self) -> Result<S::Ok, S::Error> {
+    ///         let version = Ext::new('V' as i8, [1]);
+    ///         // Writing version before data if `S` is correct serializer
+    ///         write_ext(&mut ser, |ser| ser.ext_writer().write_ext(&version))?
+    /// 
+    ///         // Serialization `Type`
+    ///     }
+    /// }
+    /// ```
+    #[inline]
+    pub fn with_ext<B>(self) -> Serializer<W, ExtConfig<C, B>> {
+        let Serializer { wr, depth, config } = self;
+        Serializer {
+            wr,
+            depth,
+            config: ExtConfig::new(config),
         }
     }
 }
