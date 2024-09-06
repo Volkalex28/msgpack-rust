@@ -1,8 +1,10 @@
 //! Serialize a Rust data structure into MessagePack data.
 
+#[cfg(not(feature = "std"))]
+use alloc::{string::{String, ToString}, vec::Vec};
+#[cfg(feature = "std")]
 use std::error;
-use std::fmt::{self, Display};
-use std::io::Write;
+use core::fmt::{self, Display};
 
 use serde;
 use serde::ser::{
@@ -11,7 +13,7 @@ use serde::ser::{
 };
 use serde::Serialize;
 
-use rmp::encode::ValueWriteError;
+use rmp::encode::{ValueWriteError, RmpWrite, RmpWriteErr};
 use rmp::{encode, Marker};
 
 use crate::config::{
@@ -23,9 +25,9 @@ use crate::{MSGPACK_EXT_STRUCT_NAME, Ext};
 /// This type represents all possible errors that can occur when serializing or
 /// deserializing MessagePack data.
 #[derive(Debug)]
-pub enum Error {
+pub enum Error<E: RmpWriteErr> {
     /// Failed to write a MessagePack value.
-    InvalidValueWrite(ValueWriteError),
+    InvalidValueWrite(ValueWriteError<E>),
     //TODO: This can be removed at some point
     /// Failed to serialize struct, sequence or map, because its length is unknown.
     UnknownLength,
@@ -37,7 +39,8 @@ pub enum Error {
     Syntax(String),
 }
 
-impl error::Error for Error {
+#[cfg(feature = "std")]
+impl<E: RmpWriteErr> error::Error for Error<E> {
     #[cold]
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match *self {
@@ -50,7 +53,7 @@ impl error::Error for Error {
     }
 }
 
-impl Display for Error {
+impl<E: RmpWriteErr> Display for Error<E> {
     #[cold]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         match *self {
@@ -65,17 +68,17 @@ impl Display for Error {
     }
 }
 
-impl From<ValueWriteError> for Error {
+impl<E: RmpWriteErr> From<ValueWriteError<E>> for Error<E> {
     #[cold]
-    fn from(err: ValueWriteError) -> Error {
+    fn from(err: ValueWriteError<E>) -> Error<E> {
         Error::InvalidValueWrite(err)
     }
 }
 
-impl serde::ser::Error for Error {
+impl<E: RmpWriteErr> serde::ser::Error for Error<E> {
     /// Raised when there is general error when deserializing a type.
     #[cold]
-    fn custom<T: Display>(msg: T) -> Error {
+    fn custom<T: Display>(msg: T) -> Error<E> {
         Error::Syntax(msg.to_string())
     }
 }
@@ -83,7 +86,7 @@ impl serde::ser::Error for Error {
 /// Obtain the underlying writer.
 pub trait UnderlyingWrite {
     /// Underlying writer type.
-    type Write: Write;
+    type Write: RmpWrite;
 
     /// Gets a reference to the underlying writer.
     fn get_ref(&self) -> &Self::Write;
@@ -118,7 +121,7 @@ pub struct Serializer<W, C = DefaultConfig> {
     depth: usize,
 }
 
-impl<W: Write, C> Serializer<W, C> {
+impl<W: RmpWrite, C> Serializer<W, C> {
     /// Gets a reference to the underlying writer.
     #[inline(always)]
     pub fn get_ref(&self) -> &W {
@@ -149,7 +152,7 @@ impl<W: Write, C> Serializer<W, C> {
     }
 }
 
-impl<W: Write> Serializer<W, DefaultConfig> {
+impl<W: RmpWrite> Serializer<W, DefaultConfig> {
     /// Constructs a new `MessagePack` serializer whose output will be written to the writer
     /// specified.
     ///
@@ -167,18 +170,18 @@ impl<W: Write> Serializer<W, DefaultConfig> {
     }
 }
 
-impl<'a, W: Write + 'a, C> Serializer<W, C> {
+impl<'a, W: RmpWrite + 'a, C> Serializer<W, C> {
     #[inline]
-    fn compound(&'a mut self) -> Result<Compound<'a, W, C>, Error> {
+    fn compound(&'a mut self) -> Result<Compound<'a, W, C>, Error<W::Error>> {
         let c = Compound { se: self };
         Ok(c)
     }
 }
 
-impl<'a, W: Write + 'a, C: SerializerConfig> Serializer<W, C> {
+impl<'a, W: RmpWrite + 'a, C: SerializerConfig> Serializer<W, C> {
     #[inline]
-    fn maybe_unknown_len_compound<F>(&'a mut self, len: Option<usize>, f: F) -> Result<MaybeUnknownLengthCompound<'a, W, C>, Error>
-    where F: Fn(&mut W, u32) -> Result<Marker, ValueWriteError>
+    fn maybe_unknown_len_compound<F>(&'a mut self, len: Option<usize>, f: F) -> Result<MaybeUnknownLengthCompound<'a, W, C>, Error<W::Error>>
+    where F: Fn(&mut W, u32) -> Result<Marker, ValueWriteError<W::Error>>
     {
         Ok(MaybeUnknownLengthCompound {
             compound: match len {
@@ -193,12 +196,12 @@ impl<'a, W: Write + 'a, C: SerializerConfig> Serializer<W, C> {
     }
 }
 
-impl<'a, W: Write + 'a, C: SerializerConfig> Serializer<W, C> {    
+impl<'a, W: RmpWrite + 'a, C: SerializerConfig> Serializer<W, C> {    
     /// Serializing `Ext` data
     /// 
     /// Type `B` should serialize as binary data
     #[inline]
-    pub fn write_ext(&mut self, ext: &Ext<C::ExtBuffer>) -> Result<(), Error>
+    pub fn write_ext(&mut self, ext: &Ext<C::ExtBuffer>) -> Result<(), Error<W::Error>>
     where 
         C::ExtBuffer: Serialize 
     {
@@ -206,7 +209,7 @@ impl<'a, W: Write + 'a, C: SerializerConfig> Serializer<W, C> {
     }
 }
 
-impl<W: Write, C> Serializer<W, C> {
+impl<W: RmpWrite, C> Serializer<W, C> {
     /// Consumes this serializer returning the new one, which will serialize structs as a map.
     ///
     /// This is used, when the default struct serialization as a tuple does not fit your
@@ -307,7 +310,7 @@ impl<W: Write, C> Serializer<W, C> {
     }
 }
 
-impl<W: Write, C> UnderlyingWrite for Serializer<W, C> {
+impl<W: RmpWrite, C> UnderlyingWrite for Serializer<W, C> {
     type Write = W;
 
     #[inline(always)]
@@ -347,9 +350,9 @@ pub struct ExtSerializer<'a, W> {
     tuple_received: bool,
 }
 
-impl<'a, W: Write + 'a, C: SerializerConfig> SerializeSeq for Compound<'a, W, C> {
+impl<'a, W: RmpWrite + 'a, C: SerializerConfig> SerializeSeq for Compound<'a, W, C> {
     type Ok = ();
-    type Error = Error;
+    type Error = Error<W::Error>;
 
     #[inline]
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
@@ -362,9 +365,9 @@ impl<'a, W: Write + 'a, C: SerializerConfig> SerializeSeq for Compound<'a, W, C>
     }
 }
 
-impl<'a, W: Write + 'a, C: SerializerConfig> SerializeTuple for Compound<'a, W, C> {
+impl<'a, W: RmpWrite + 'a, C: SerializerConfig> SerializeTuple for Compound<'a, W, C> {
     type Ok = ();
-    type Error = Error;
+    type Error = Error<W::Error>;
 
     #[inline]
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
@@ -377,9 +380,9 @@ impl<'a, W: Write + 'a, C: SerializerConfig> SerializeTuple for Compound<'a, W, 
     }
 }
 
-impl<'a, W: Write + 'a, C: SerializerConfig> SerializeTupleStruct for Compound<'a, W, C> {
+impl<'a, W: RmpWrite + 'a, C: SerializerConfig> SerializeTupleStruct for Compound<'a, W, C> {
     type Ok = ();
-    type Error = Error;
+    type Error = Error<W::Error>;
 
     #[inline]
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
@@ -392,9 +395,9 @@ impl<'a, W: Write + 'a, C: SerializerConfig> SerializeTupleStruct for Compound<'
     }
 }
 
-impl<'a, W: Write + 'a, C: SerializerConfig> SerializeStruct for Compound<'a, W, C> {
+impl<'a, W: RmpWrite + 'a, C: SerializerConfig> SerializeStruct for Compound<'a, W, C> {
     type Ok = ();
-    type Error = Error;
+    type Error = Error<W::Error>;
 
     #[inline]
     fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) ->
@@ -409,9 +412,9 @@ impl<'a, W: Write + 'a, C: SerializerConfig> SerializeStruct for Compound<'a, W,
     }
 }
 
-impl<'a, W: Write + 'a, C: SerializerConfig> SerializeTupleVariant for Compound<'a, W, C> {
+impl<'a, W: RmpWrite + 'a, C: SerializerConfig> SerializeTupleVariant for Compound<'a, W, C> {
     type Ok = ();
-    type Error = Error;
+    type Error = Error<W::Error>;
 
     #[inline]
     fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
@@ -424,9 +427,9 @@ impl<'a, W: Write + 'a, C: SerializerConfig> SerializeTupleVariant for Compound<
     }
 }
 
-impl<'a, W: Write + 'a, C: SerializerConfig> SerializeStructVariant for Compound<'a, W, C> {
+impl<'a, W: RmpWrite + 'a, C: SerializerConfig> SerializeStructVariant for Compound<'a, W, C> {
     type Ok = ();
-    type Error = Error;
+    type Error = Error<W::Error>;
 
     fn serialize_field<T: ?Sized + Serialize>(&mut self, key: &'static str, value: &T) ->
         Result<(), Self::Error>
@@ -444,13 +447,13 @@ impl<'a, W: Write + 'a, C: SerializerConfig> SerializeStructVariant for Compound
 /// and a counter for the number of elements that are encoded by the `Serializer`.
 #[derive(Debug)]
 struct UnknownLengthCompound<C> {
-    se: Serializer<Vec<u8>, C>,
+    se: Serializer<encode::ByteBuf, C>,
     elem_count: u32,
 }
 impl<W, C: SerializerConfig> From<&Serializer<W, C>> for UnknownLengthCompound<C> {
     fn from(se: &Serializer<W, C>) -> Self {
         Self {
-            se: Serializer { wr: Vec::with_capacity(128), config: se.config, depth: se.depth },
+            se: Serializer { wr: encode::ByteBuf::with_capacity(128), config: se.config, depth: se.depth },
             elem_count: 0
         }
     }
@@ -477,15 +480,25 @@ pub struct MaybeUnknownLengthCompound<'a, W: 'a, C: 'a> {
     compound: Option<UnknownLengthCompound<C>>,
 }
 
-impl<'a, W: Write + 'a, C: SerializerConfig> SerializeSeq for MaybeUnknownLengthCompound<'a, W, C> {
+impl<'a, W: RmpWrite + 'a, C: SerializerConfig> SerializeSeq for MaybeUnknownLengthCompound<'a, W, C> {
     type Ok = ();
-    type Error = Error;
+    type Error = Error<W::Error>;
 
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
         match self.compound.as_mut() {
             None => value.serialize(&mut *self.se),
             Some(buf) => {
-                value.serialize(&mut buf.se)?;
+                value.serialize(&mut buf.se).map_err(|err| {
+                    match err {
+                        // This is valid because the error for encode::ByteBuff is always Infalible
+                        Error::InvalidValueWrite(_) => unreachable!(),
+                        Error::UnknownLength => Error::UnknownLength,
+                        Error::InvalidDataModel(err) => Error::InvalidDataModel(err),
+                        Error::DepthLimitExceeded => Error::DepthLimitExceeded,
+                        Error::Syntax(err) => Error::Syntax(err),
+                    }
+                })?;
+
                 buf.elem_count += 1;
                 Ok(())
             }
@@ -495,16 +508,16 @@ impl<'a, W: Write + 'a, C: SerializerConfig> SerializeSeq for MaybeUnknownLength
     fn end(self) -> Result<Self::Ok, Self::Error> {
         if let Some(compound) = self.compound {
             encode::write_array_len(&mut self.se.wr, compound.elem_count)?;
-            self.se.wr.write_all(&compound.se.into_inner())
+            self.se.wr.write_bytes(compound.se.into_inner().as_slice())
                 .map_err(ValueWriteError::InvalidDataWrite)?;
         }
         Ok(())
     }
 }
 
-impl<'a, W: Write + 'a, C: SerializerConfig> SerializeMap for MaybeUnknownLengthCompound<'a, W, C> {
+impl<'a, W: RmpWrite + 'a, C: SerializerConfig> SerializeMap for MaybeUnknownLengthCompound<'a, W, C> {
     type Ok = ();
-    type Error = Error;
+    type Error = Error<W::Error>;
 
     fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> Result<(), Self::Error> {
         <Self as SerializeSeq>::serialize_element(self, key)
@@ -517,7 +530,7 @@ impl<'a, W: Write + 'a, C: SerializerConfig> SerializeMap for MaybeUnknownLength
     fn end(self) -> Result<Self::Ok, Self::Error> {
         if let Some(compound) = self.compound {
             encode::write_map_len(&mut self.se.wr, compound.elem_count / 2)?;
-            self.se.wr.write_all(&compound.se.into_inner())
+            self.se.wr.write_bytes(compound.se.into_inner().as_slice())
                 .map_err(ValueWriteError::InvalidDataWrite)?;
         }
         Ok(())
@@ -526,11 +539,11 @@ impl<'a, W: Write + 'a, C: SerializerConfig> SerializeMap for MaybeUnknownLength
 
 impl<'a, W, C> serde::Serializer for &'a mut Serializer<W, C>
 where
-    W: Write,
+    W: RmpWrite,
     C: SerializerConfig,
 {
     type Ok = ();
-    type Error = Error;
+    type Error = Error<W::Error>;
 
     type SerializeSeq = MaybeUnknownLengthCompound<'a, W, C>;
     type SerializeTuple = Compound<'a, W, C>;
@@ -615,7 +628,7 @@ where
     fn serialize_bytes(self, value: &[u8]) -> Result<Self::Ok, Self::Error> {
         encode::write_bin_len(&mut self.wr, value.len() as u32)?;
         self.wr
-            .write_all(value)
+            .write_bytes(value)
             .map_err(|err| Error::InvalidValueWrite(ValueWriteError::InvalidDataWrite(err)))
     }
 
@@ -662,7 +675,7 @@ where
         value.serialize(self)
     }
 
-    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Error> {
+    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
         self.maybe_unknown_len_compound(len, |wr, len| encode::write_array_len(wr, len))
     }
 
@@ -682,7 +695,7 @@ where
     }
 
     fn serialize_tuple_variant(self, _name: &'static str, idx: u32, variant: &'static str, len: usize) ->
-        Result<Self::SerializeTupleVariant, Error>
+        Result<Self::SerializeTupleVariant, Error<W::Error>>
     {
         // encode as a map from variant idx to a sequence of its attributed data, like: {idx => [v1,...,vN]}
         encode::write_map_len(&mut self.wr, 1)?;
@@ -690,7 +703,7 @@ where
         self.serialize_tuple(len)
     }
 
-    fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Error> {
+    fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Error<W::Error>> {
         self.maybe_unknown_len_compound(len, |wr, len| encode::write_map_len(wr, len))
     }
 
@@ -702,7 +715,7 @@ where
     }
 
     fn serialize_struct_variant(self, name: &'static str, id: u32, variant: &'static str, len: usize) ->
-        Result<Self::SerializeStructVariant, Error>
+        Result<Self::SerializeStructVariant, Error<W::Error>>
     {
         // encode as a map from variant idx to a sequence of its attributed data, like: {idx => [v1,...,vN]}
         encode::write_map_len(&mut self.wr, 1)?;
@@ -711,17 +724,17 @@ where
     }
 }
 
-impl<'a, W: Write + 'a> serde::Serializer for &mut ExtFieldSerializer<'a, W> {
+impl<'a, W: RmpWrite + 'a> serde::Serializer for &mut ExtFieldSerializer<'a, W> {
     type Ok = ();
-    type Error = Error;
+    type Error = Error<W::Error>;
 
-    type SerializeSeq = serde::ser::Impossible<(), Error>;
-    type SerializeTuple = serde::ser::Impossible<(), Error>;
-    type SerializeTupleStruct = serde::ser::Impossible<(), Error>;
-    type SerializeTupleVariant = serde::ser::Impossible<(), Error>;
-    type SerializeMap = serde::ser::Impossible<(), Error>;
-    type SerializeStruct = serde::ser::Impossible<(), Error>;
-    type SerializeStructVariant = serde::ser::Impossible<(), Error>;
+    type SerializeSeq = serde::ser::Impossible<(), Self::Error>;
+    type SerializeTuple = serde::ser::Impossible<(), Self::Error>;
+    type SerializeTupleStruct = serde::ser::Impossible<(), Self::Error>;
+    type SerializeTupleVariant = serde::ser::Impossible<(), Self::Error>;
+    type SerializeMap = serde::ser::Impossible<(), Self::Error>;
+    type SerializeStruct = serde::ser::Impossible<(), Self::Error>;
+    type SerializeStructVariant = serde::ser::Impossible<(), Self::Error>;
 
     #[inline]
     fn serialize_i8(self, value: i8) -> Result<Self::Ok, Self::Error> {
@@ -738,7 +751,7 @@ impl<'a, W: Write + 'a> serde::Serializer for &mut ExtFieldSerializer<'a, W> {
         if let Some(tag) = self.tag.take() {
             encode::write_ext_meta(self.wr, val.len() as u32, tag)?;
             self.wr
-                .write_all(val)
+                .write_bytes(val)
                 .map_err(|err| Error::InvalidValueWrite(ValueWriteError::InvalidDataWrite(err)))?;
 
             self.finish = true;
@@ -853,42 +866,42 @@ impl<'a, W: Write + 'a> serde::Serializer for &mut ExtFieldSerializer<'a, W> {
         Err(Error::InvalidDataModel("expected i8 and bytes, seq unexpected"))
     }
 
-    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Error> {
+    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> {
         Err(Error::InvalidDataModel("expected i8 and bytes, tuple unexpected"))
     }
 
-    fn serialize_tuple_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeTupleStruct, Error> {
+    fn serialize_tuple_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeTupleStruct, Self::Error> {
         Err(Error::InvalidDataModel("expected i8 and bytes, tuple struct unexpected"))
     }
 
-    fn serialize_tuple_variant(self, _name: &'static str, _idx: u32, _variant: &'static str, _len: usize) -> Result<Self::SerializeTupleVariant, Error> {
+    fn serialize_tuple_variant(self, _name: &'static str, _idx: u32, _variant: &'static str, _len: usize) -> Result<Self::SerializeTupleVariant, Self::Error> {
         Err(Error::InvalidDataModel("expected i8 and bytes, tuple variant unexpected"))
     }
 
-    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Error> {
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
         Err(Error::InvalidDataModel("expected i8 and bytes, map unexpected"))
     }
 
-    fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct, Error> {
+    fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct, Self::Error> {
         Err(Error::InvalidDataModel("expected i8 and bytes, struct unexpected"))
     }
 
-    fn serialize_struct_variant(self, _name: &'static str, _idx: u32, _variant: &'static str, _len: usize) -> Result<Self::SerializeStructVariant, Error> {
+    fn serialize_struct_variant(self, _name: &'static str, _idx: u32, _variant: &'static str, _len: usize) -> Result<Self::SerializeStructVariant, Self::Error> {
         Err(Error::InvalidDataModel("expected i8 and bytes, struct variant unexpected"))
     }
 }
 
-impl<'a, W: Write + 'a> serde::ser::Serializer for &mut ExtSerializer<'a, W> {
+impl<'a, W: RmpWrite + 'a> serde::ser::Serializer for &mut ExtSerializer<'a, W> {
     type Ok = ();
-    type Error = Error;
+    type Error = Error<W::Error>;
 
-    type SerializeSeq = serde::ser::Impossible<(), Error>;
+    type SerializeSeq = serde::ser::Impossible<(), Self::Error>;
     type SerializeTuple = Self;
-    type SerializeTupleStruct = serde::ser::Impossible<(), Error>;
-    type SerializeTupleVariant = serde::ser::Impossible<(), Error>;
-    type SerializeMap = serde::ser::Impossible<(), Error>;
-    type SerializeStruct = serde::ser::Impossible<(), Error>;
-    type SerializeStructVariant = serde::ser::Impossible<(), Error>;
+    type SerializeTupleStruct = serde::ser::Impossible<(), Self::Error>;
+    type SerializeTupleVariant = serde::ser::Impossible<(), Self::Error>;
+    type SerializeMap = serde::ser::Impossible<(), Self::Error>;
+    type SerializeStruct = serde::ser::Impossible<(), Self::Error>;
+    type SerializeStructVariant = serde::ser::Impossible<(), Self::Error>;
 
     #[cold]
     fn serialize_bytes(self, _val: &[u8]) -> Result<Self::Ok, Self::Error> {
@@ -1006,7 +1019,7 @@ impl<'a, W: Write + 'a> serde::ser::Serializer for &mut ExtSerializer<'a, W> {
         Err(Error::InvalidDataModel("expected tuple, received seq"))
     }
 
-    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Error> {
+    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> {
         // FIXME check len
         self.tuple_received = true;
 
@@ -1014,34 +1027,34 @@ impl<'a, W: Write + 'a> serde::ser::Serializer for &mut ExtSerializer<'a, W> {
     }
 
     #[cold]
-    fn serialize_tuple_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeTupleStruct, Error> {
+    fn serialize_tuple_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeTupleStruct, Self::Error> {
         Err(Error::InvalidDataModel("expected tuple, received tuple_struct"))
     }
 
     #[cold]
-    fn serialize_tuple_variant(self, _name: &'static str, _idx: u32, _variant: &'static str, _len: usize) -> Result<Self::SerializeTupleVariant, Error> {
+    fn serialize_tuple_variant(self, _name: &'static str, _idx: u32, _variant: &'static str, _len: usize) -> Result<Self::SerializeTupleVariant, Self::Error> {
         Err(Error::InvalidDataModel("expected tuple, received tuple_variant"))
     }
 
     #[cold]
-    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Error> {
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
         Err(Error::InvalidDataModel("expected tuple, received map"))
     }
 
     #[cold]
-    fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct, Error> {
+    fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct, Self::Error> {
         Err(Error::InvalidDataModel("expected tuple, received struct"))
     }
 
     #[cold]
-    fn serialize_struct_variant(self, _name: &'static str, _idx: u32, _variant: &'static str, _len: usize) -> Result<Self::SerializeStructVariant, Error> {
+    fn serialize_struct_variant(self, _name: &'static str, _idx: u32, _variant: &'static str, _len: usize) -> Result<Self::SerializeStructVariant, Self::Error> {
         Err(Error::InvalidDataModel("expected tuple, received struct_variant"))
     }
 }
 
-impl<'a, W: Write + 'a> SerializeTuple for &mut ExtSerializer<'a, W> {
+impl<'a, W: RmpWrite + 'a> SerializeTuple for &mut ExtSerializer<'a, W> {
     type Ok = ();
-    type Error = Error;
+    type Error = Error<W::Error>;
 
     #[inline]
     fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
@@ -1054,7 +1067,7 @@ impl<'a, W: Write + 'a> SerializeTuple for &mut ExtSerializer<'a, W> {
     }
 }
 
-impl<'a, W: Write + 'a> ExtSerializer<'a, W> {
+impl<'a, W: RmpWrite + 'a> ExtSerializer<'a, W> {
     #[inline]
     fn new<C>(ser: &'a mut Serializer<W, C>) -> Self {
         Self {
@@ -1064,7 +1077,7 @@ impl<'a, W: Write + 'a> ExtSerializer<'a, W> {
     }
 
     #[inline]
-    fn end(self) -> Result<(), Error> {
+    fn end(self) -> Result<(), Error<W::Error>> {
         if !self.tuple_received {
             Err(Error::InvalidDataModel("expected tuple, received nothing"))
         } else {
@@ -1073,7 +1086,7 @@ impl<'a, W: Write + 'a> ExtSerializer<'a, W> {
     }
 }
 
-impl<'a, W: Write + 'a> ExtFieldSerializer<'a, W> {
+impl<'a, W: RmpWrite + 'a> ExtFieldSerializer<'a, W> {
     #[inline]
     fn new<C>(ser: &'a mut Serializer<W, C>) -> Self {
         Self {
@@ -1084,7 +1097,7 @@ impl<'a, W: Write + 'a> ExtFieldSerializer<'a, W> {
     }
 
     #[inline]
-    fn end(self) -> Result<(), Error> {
+    fn end(self) -> Result<(), Error<W::Error>> {
         if self.finish {
             Ok(())
         } else {
@@ -1093,14 +1106,19 @@ impl<'a, W: Write + 'a> ExtFieldSerializer<'a, W> {
     }
 }
 
+#[cfg(feature = "std")]
+use std::io::Write;
+#[cfg(not(feature = "std"))]
+use RmpWrite as Write;
+
 /// Serialize the given data structure as MessagePack into the I/O stream.
 /// This function uses compact representation - structures as arrays
 ///
 /// Serialization can fail if `T`'s implementation of `Serialize` decides to fail.
 #[inline]
-pub fn write<W, T>(wr: &mut W, val: &T) -> Result<(), Error>
+pub fn write<W, T>(wr: &mut W, val: &T) -> Result<(), Error<<W as RmpWrite>::Error>>
 where
-    W: Write + ?Sized,
+    W: Write,
     T: Serialize + ?Sized
 {
     val.serialize(&mut Serializer::new(wr))
@@ -1110,9 +1128,9 @@ where
 /// This function serializes structures as maps
 ///
 /// Serialization can fail if `T`'s implementation of `Serialize` decides to fail.
-pub fn write_named<W, T>(wr: &mut W, val: &T) -> Result<(), Error>
+pub fn write_named<'a, W, T>(wr: &'a mut W, val: &T) -> Result<(), Error<<W as RmpWrite>::Error>>
 where
-    W: Write + ?Sized,
+    W: Write,
     T: Serialize + ?Sized
 {
     let mut se = Serializer::new(wr).with_struct_map();
@@ -1124,7 +1142,7 @@ where
 ///
 /// Serialization can fail if `T`'s implementation of `Serialize` decides to fail.
 #[inline]
-pub fn to_vec<T>(val: &T) -> Result<Vec<u8>, Error>
+pub fn to_vec<T>(val: &T) -> Result<Vec<u8>, Error<<Vec<u8> as RmpWrite>::Error>>
 where
     T: Serialize + ?Sized
 {
@@ -1140,7 +1158,7 @@ where
 ///
 /// Serialization can fail if `T`'s implementation of `Serialize` decides to fail.
 #[inline]
-pub fn to_vec_named<T>(val: &T) -> Result<Vec<u8>, Error>
+pub fn to_vec_named<T>(val: &T) -> Result<Vec<u8>, Error<<Vec<u8> as RmpWrite>::Error>>
 where
     T: Serialize + ?Sized
 {

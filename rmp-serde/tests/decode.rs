@@ -22,7 +22,7 @@ fn fail_nil_from_reserved() {
     let buf = [0xc1];
     let mut de = Deserializer::new(&buf[..]);
 
-    let res: Result<(), Error> = Deserialize::deserialize(&mut de);
+    let res: Result<(), _> = Deserialize::deserialize(&mut de);
     match res.err() {
         Some(Error::TypeMismatch(Marker::Reserved)) => (),
         other => panic!("unexpected result: {:?}", other),
@@ -45,7 +45,7 @@ fn fail_bool_from_fixint() {
 
     let mut deserializer = Deserializer::new(cur);
 
-    let res: Result<bool, Error> = Deserialize::deserialize(&mut deserializer);
+    let res: Result<bool, _> = Deserialize::deserialize(&mut deserializer);
     match res.err().unwrap() {
         Error::Syntax(..) => (),
         other => panic!("unexpected result: {:?}", other),
@@ -79,7 +79,7 @@ fn fail_u32_from_u64() {
 
     let mut de = Deserializer::new(cur);
 
-    let res: Result<u32, Error> = Deserialize::deserialize(&mut de);
+    let res: Result<u32, _> = Deserialize::deserialize(&mut de);
     match res.err().unwrap() {
         Error::Syntax(..) => (),
         other => panic!("unexpected result: {:?}", other),
@@ -247,7 +247,7 @@ fn fail_tuple_len_mismatch() {
     let cur = Cursor::new(&buf[..]);
 
     let mut de = Deserializer::new(cur);
-    let actual: Result<(u32,), Error> = Deserialize::deserialize(&mut de);
+    let actual: Result<(u32,), _> = Deserialize::deserialize(&mut de);
 
     match actual.err().unwrap() {
         Error::LengthMismatch(1) => (),
@@ -297,7 +297,7 @@ fn fail_option_u8_from_reserved() {
     let cur = Cursor::new(&buf[..]);
 
     let mut de = Deserializer::new(cur);
-    let actual: Result<Option<u8>, Error> = Deserialize::deserialize(&mut de);
+    let actual: Result<Option<u8>, _> = Deserialize::deserialize(&mut de);
     match actual.err() {
         Some(Error::TypeMismatch(Marker::Reserved)) => (),
         other => panic!("unexpected result: {:?}", other),
@@ -532,7 +532,7 @@ fn pass_raw_ref_invalid_utf8() {
 #[test]
 fn fail_str_invalid_utf8() {
     let buf = vec![0xa4, 0x92, 0xcc, 0xc8, 0x90];
-    let err: Result<String, decode::Error> = rmps::from_slice(&buf[..]);
+    let err: Result<String, _> = rmps::from_slice(&buf[..]);
 
     assert!(err.is_err());
     match err.err().unwrap() {

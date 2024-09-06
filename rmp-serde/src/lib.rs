@@ -57,17 +57,23 @@
 //! [serde]: https://serde.rs/
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations, missing_docs)]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
 
 #[macro_use]
 extern crate serde;
 
-use std::fmt::{self, Display, Formatter};
-use std::str::{self, Utf8Error};
+use core::fmt::{self, Display, Formatter};
+use core::str::{self, Utf8Error};
 
 use serde::de;
 use serde::{Deserialize, Serialize};
 
-pub use crate::decode::{from_read, Deserializer};
+#[cfg(feature = "std")]
+pub use crate::decode::from_read;
+pub use crate::decode::Deserializer;
 #[allow(deprecated)]
 pub use crate::decode::from_read_ref;
 pub use crate::encode::{to_vec, to_vec_named, Serializer};
@@ -116,12 +122,14 @@ impl<B> Ext<B> {
 /// invalid UTF-8.
 ///
 /// Regardless of validity the UTF-8 content this type will always be serialized as a string.
+#[cfg(feature = "std")]
 #[derive(Clone, Debug, PartialEq)]
 #[doc(hidden)]
 pub struct Raw {
     s: Result<String, (Vec<u8>, Utf8Error)>,
 }
 
+#[cfg(feature = "std")]
 impl Raw {
     /// Constructs a new `Raw` from the UTF-8 string.
     #[inline]
@@ -199,6 +207,7 @@ impl Raw {
     }
 }
 
+#[cfg(feature = "std")]
 impl Serialize for Raw {
     fn serialize<S>(&self, se: S) -> Result<S::Ok, S::Error>
     where
@@ -211,8 +220,10 @@ impl Serialize for Raw {
     }
 }
 
+#[cfg(feature = "std")]
 struct RawVisitor;
 
+#[cfg(feature = "std")]
 impl<'de> de::Visitor<'de> for RawVisitor {
     type Value = Raw;
 
@@ -261,6 +272,7 @@ impl<'de> de::Visitor<'de> for RawVisitor {
     }
 }
 
+#[cfg(feature = "std")]
 impl<'de> Deserialize<'de> for Raw {
     #[inline]
     fn deserialize<D>(de: D) -> Result<Self, D::Error>
@@ -274,6 +286,7 @@ impl<'de> Deserialize<'de> for Raw {
 /// invalid UTF-8.
 ///
 /// Regardless of validity the UTF-8 content this type will always be serialized as a string.
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[doc(hidden)]
 pub struct RawRef<'a> {

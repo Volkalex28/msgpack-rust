@@ -15,9 +15,14 @@ edition = "2021"
 tag-prefix = "{{crate_name}}/"
 
 [dependencies]
-byteorder = "1.4.3"
-serde = { version = "1.0.136", features = ["derive"] }
-rmp = { version = "0.8.11", path = "../rmp" }
+byteorder = { version = "1.4.3", default-features = false }
+serde = { version = "1.0.136", default-features = false, features = ["derive", "alloc"] }
+rmp = { version = "0.8.11", default-features = false, path = "../rmp" }
+
+[features]
+default = ["std"]
+std = ["byteorder/std", "serde/std", "rmp/std"]
+nightly = ["rmp/nightly"]
 
 [dev-dependencies]
 rmpv = { path = "../rmpv" }

@@ -1,7 +1,7 @@
 //! Change MessagePack behavior with configuration wrappers.
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
-use rmp::{encode as rmp_encode, Marker};
+use rmp::{decode::RmpReadErr, encode::{self as rmp_encode, RmpWrite}, Marker};
 use serde::{Serialize, Serializer, Deserialize, Deserializer};
 
 use crate::{Ext, encode::{self, UnderlyingWrite}, decode};
@@ -15,7 +15,7 @@ pub trait SerializerConfig: sealed::SerializerConfig {}
 impl<T: sealed::SerializerConfig> SerializerConfig for T {}
 
 mod sealed {
-    use rmp::Marker;
+    use rmp::{decode::RmpReadErr, encode::RmpWrite, Marker};
     use serde::{Serialize, Serializer, Deserialize, Deserializer};
 
     use crate::{Ext, encode::{self, UnderlyingWrite}, decode};
@@ -27,15 +27,15 @@ mod sealed {
     pub trait SerializerConfig: Copy {
         type ExtBuffer;
 
-        fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
+        fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
         where
             S: UnderlyingWrite,
-            for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>;
+            for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>;
 
-        fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error>
+        fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
         where
             S: UnderlyingWrite,
-            for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+            for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
             T: ?Sized + Serialize;
 
         /// Encodes an enum variant ident (id or name) according to underlying writer.
@@ -45,31 +45,32 @@ mod sealed {
             ser: &mut S,
             variant_index: u32,
             variant: &'static str,
-        ) -> Result<(), encode::Error>
+        ) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
         where
             S: UnderlyingWrite,
-            for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>;
+            for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>;
 
         /// Determines the value of `Serializer::is_human_readable` and
         /// `Deserializer::is_human_readable`.
         fn is_human_readable() -> bool;
 
         #[inline(always)]
-        fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error>
+        fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
         where
             S: UnderlyingWrite,
             Self::ExtBuffer: Serialize,
-            for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error> 
+            for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>> 
         {
             let _ = (ser, ext);
             Ok(())
         }
 
         #[inline(always)]
-        fn try_read_ext<'de, D>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error>
+        fn try_read_ext<'de, D, E>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error<E>>
         where
+            E: RmpReadErr,
             Self::ExtBuffer: Deserialize<'de>,
-            for<'a> &'a mut D: Deserializer<'de, Error = decode::Error> 
+            for<'a> &'a mut D: Deserializer<'de, Error = decode::Error<E>> 
         {
             _ = (der, marker);
             Ok(None)
@@ -91,10 +92,10 @@ pub struct DefaultConfig;
 impl sealed::SerializerConfig for DefaultConfig {
     type ExtBuffer = ();
 
-    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
+    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
     {
         rmp_encode::write_array_len(ser.get_mut(), len as u32)?;
 
@@ -102,10 +103,10 @@ impl sealed::SerializerConfig for DefaultConfig {
     }
 
     #[inline]
-    fn write_struct_field<S, T>(ser: &mut S, _key: &'static str, value: &T) -> Result<(), encode::Error>
+    fn write_struct_field<S, T>(ser: &mut S, _key: &'static str, value: &T) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
         T: ?Sized + Serialize,
     {
         value.serialize(ser)
@@ -116,10 +117,10 @@ impl sealed::SerializerConfig for DefaultConfig {
         ser: &mut S,
         _variant_index: u32,
         variant: &'static str,
-    ) -> Result<(), encode::Error>
+    ) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
     {
         ser.serialize_str(variant)
     }
@@ -154,20 +155,20 @@ where
 {
     type ExtBuffer = C::ExtBuffer;
     
-    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
+    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
     {
         rmp_encode::write_map_len(ser.get_mut(), len as u32)?;
 
         Ok(())
     }
 
-    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error>
+    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
         T: ?Sized + Serialize,
     {
         rmp_encode::write_str(ser.get_mut(), key)?;
@@ -179,10 +180,10 @@ where
         ser: &mut S,
         variant_index: u32,
         variant: &'static str,
-    ) -> Result<(), encode::Error>
+    ) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
     {
         C::write_variant_ident(ser, variant_index, variant)
     }
@@ -193,20 +194,21 @@ where
     }
 
     #[inline]
-    fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error>
+    fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
+    S: UnderlyingWrite,
         Self::ExtBuffer: Serialize,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error> 
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>> 
     {
         C::write_ext(ser, ext)
     }
 
     #[inline(always)]
-    fn try_read_ext<'de, D>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error>
+    fn try_read_ext<'de, D, E>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error<E>>
     where
+        E: RmpReadErr,
         Self::ExtBuffer: Deserialize<'de>,
-        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error> 
+        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error<E>> 
     {
         C::try_read_ext(der, marker)
     }
@@ -231,10 +233,10 @@ where
 {
     type ExtBuffer = C::ExtBuffer;
     
-    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
+    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
     {
         rmp_encode::write_array_len(ser.get_mut(), len as u32)?;
 
@@ -242,10 +244,10 @@ where
     }
 
     #[inline]
-    fn write_struct_field<S, T>(ser: &mut S, _key: &'static str, value: &T) -> Result<(), encode::Error>
+    fn write_struct_field<S, T>(ser: &mut S, _key: &'static str, value: &T) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
         T: ?Sized + Serialize,
     {
         value.serialize(ser)
@@ -256,10 +258,10 @@ where
         ser: &mut S,
         variant_index: u32,
         variant: &'static str,
-    ) -> Result<(), encode::Error>
+    ) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
     {
         C::write_variant_ident(ser, variant_index, variant)
     }
@@ -270,20 +272,21 @@ where
     }
 
     #[inline]
-    fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error>
+    fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
+    S: UnderlyingWrite,
         Self::ExtBuffer: Serialize,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error> 
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>> 
     {
         C::write_ext(ser, ext)
     }
 
     #[inline(always)]
-    fn try_read_ext<'de, D>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error>
+    fn try_read_ext<'de, D, E>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error<E>>
     where
+        E: RmpReadErr,
         Self::ExtBuffer: Deserialize<'de>,
-        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error> 
+        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error<E>> 
     {
         C::try_read_ext(der, marker)
     }
@@ -309,19 +312,19 @@ where
     type ExtBuffer = C::ExtBuffer;
     
     #[inline]
-    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
+    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
     {
         C::write_struct_len(ser, len)
     }
 
     #[inline]
-    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error>
+    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
         T: ?Sized + Serialize,
     {
         C::write_struct_field(ser, key, value)
@@ -332,10 +335,10 @@ where
         ser: &mut S,
         variant_index: u32,
         variant: &'static str,
-    ) -> Result<(), encode::Error>
+    ) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
     {
         C::write_variant_ident(ser, variant_index, variant)
     }
@@ -346,20 +349,21 @@ where
     }
 
     #[inline]
-    fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error>
+    fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
+    S: UnderlyingWrite,
         Self::ExtBuffer: Serialize,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error> 
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>> 
     {
         C::write_ext(ser, ext)
     }
 
     #[inline(always)]
-    fn try_read_ext<'de, D>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error>
+    fn try_read_ext<'de, D, E>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error<E>>
     where
+        E: RmpReadErr,
         Self::ExtBuffer: Deserialize<'de>,
-        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error> 
+        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error<E>> 
     {
         C::try_read_ext(der, marker)
     }
@@ -385,19 +389,19 @@ where
     type ExtBuffer = C::ExtBuffer;
     
     #[inline]
-    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
+    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
     {
         C::write_struct_len(ser, len)
     }
 
     #[inline]
-    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error>
+    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
         T: ?Sized + Serialize,
     {
         C::write_struct_field(ser, key, value)
@@ -408,10 +412,10 @@ where
         ser: &mut S,
         variant_index: u32,
         variant: &'static str,
-    ) -> Result<(), encode::Error>
+    ) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
     {
         C::write_variant_ident(ser, variant_index, variant)
     }
@@ -422,20 +426,21 @@ where
     }
 
     #[inline]
-    fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error>
+    fn write_ext<S>(ser: &mut S, ext: &Ext<Self::ExtBuffer>) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
+    S: UnderlyingWrite,
         Self::ExtBuffer: Serialize,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error> 
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>> 
     {
         C::write_ext(ser, ext)
     }
 
     #[inline(always)]
-    fn try_read_ext<'de, D>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error>
+    fn try_read_ext<'de, D, E>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error<E>>
     where
+        E: RmpReadErr,
         Self::ExtBuffer: Deserialize<'de>,
-        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error> 
+        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error<E>> 
     {
         C::try_read_ext(der, marker)
     }
@@ -468,19 +473,19 @@ where
     type ExtBuffer = B;
 
     #[inline(always)]
-    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error>
+    fn write_struct_len<S>(ser: &mut S, len: usize) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
     {
         C::write_struct_len(ser, len)
     }
 
     #[inline(always)]
-    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error>
+    fn write_struct_field<S, T>(ser: &mut S, key: &'static str, value: &T) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
         T: ?Sized + Serialize,
     {
         C::write_struct_field(ser, key, value)
@@ -491,10 +496,10 @@ where
         ser: &mut S,
         variant_index: u32,
         variant: &'static str,
-    ) -> Result<(), encode::Error>
+    ) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error>,
+    S: UnderlyingWrite,
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>>,
     {
         C::write_variant_ident(ser, variant_index, variant)
     }
@@ -505,20 +510,21 @@ where
     }
 
     #[inline]
-    fn write_ext<S>(ser: &mut S, ext: &Ext<B>) -> Result<(), encode::Error>
+    fn write_ext<S>(ser: &mut S, ext: &Ext<B>) -> Result<(), encode::Error<<S::Write as RmpWrite>::Error>>
     where
-        B: Serialize,
+                B: Serialize,
         S: UnderlyingWrite,
-        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error> 
+        for<'a> &'a mut S: Serializer<Ok = (), Error = encode::Error<<S::Write as RmpWrite>::Error>> 
     {
         ext.serialize(ser)
     }
 
     #[inline(always)]
-    fn try_read_ext<'de, D>(der: &mut D, marker: Marker) -> Result<Option<Ext<B>>, decode::Error>
+    fn try_read_ext<'de, D, E>(der: &mut D, marker: Marker) -> Result<Option<Ext<Self::ExtBuffer>>, decode::Error<E>>
     where
-        B: Deserialize<'de>,
-        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error> 
+        E: RmpReadErr,
+        Self::ExtBuffer: Deserialize<'de>,
+        for<'a> &'a mut D: Deserializer<'de, Error = decode::Error<E>> 
     {
         if matches!(marker, 
             Marker::FixExt1 |

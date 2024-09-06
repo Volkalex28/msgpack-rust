@@ -148,6 +148,7 @@
 //!
 //! [read_int]: decode/fn.read_int.html
 #![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(all(not(feature = "std"), feature = "nightly"), feature(core_io_borrowed_buf))]
 
 extern crate alloc;
 

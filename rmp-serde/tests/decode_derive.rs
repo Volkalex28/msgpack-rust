@@ -1,4 +1,5 @@
-#[macro_use]
+#![allow(unexpected_cfgs)]
+
 extern crate serde_derive;
 
 extern crate rmp_serde as rmps;
@@ -189,7 +190,7 @@ fn fail_enum_overflow() {
     }
 
     let mut de = Deserializer::new(cur);
-    let actual: Result<Enum, Error> = Deserialize::deserialize(&mut de);
+    let actual: Result<Enum, _> = Deserialize::deserialize(&mut de);
 
     match actual.err().unwrap() {
         Error::Syntax(..) => (),
@@ -342,7 +343,7 @@ fn fail_internally_tagged_enum_tuple() {
     }
 
     let mut de = Deserializer::new(cur);
-    let actual: Result<Enum, Error> = Deserialize::deserialize(&mut de);
+    let actual: Result<Enum, _> = Deserialize::deserialize(&mut de);
 
     assert!(actual.is_ok())
 }
@@ -360,7 +361,7 @@ fn pass_internally_tagged_enum_struct() {
     }
 
     let mut de = Deserializer::new(cur);
-    let actual: Result<Enum, Error> = Deserialize::deserialize(&mut de);
+    let actual: Result<Enum, _> = Deserialize::deserialize(&mut de);
 
     assert!(actual.is_ok());
     assert_eq!(Enum::Foo { value: 123 }, actual.unwrap())

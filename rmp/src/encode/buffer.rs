@@ -68,6 +68,29 @@ impl<'a> RmpWrite for &'a mut [u8] {
     }
 }
 
+/// Fallback implementation for Cursor
+///
+/// Only needed for no-std as nightly because we don't have
+/// the blanket impl for `std::io::Write` and stable
+#[cfg(all(not(feature = "std"), feature = "nightly"))]
+impl<'a> RmpWrite for core::io::BorrowedCursor<'a> {
+    type Error = FixedBufCapacityOverflow;
+
+    #[inline]
+    fn write_bytes(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+        let to_write = buf.len();
+        let remaining = self.capacity();
+        if to_write <= remaining {
+            self.append(buf);
+            Ok(())
+        } else {
+            Err(FixedBufCapacityOverflow {
+                _priv: ()
+            })
+        }
+    }
+}
+
 /// A wrapper around `Vec<u8>` to serialize more efficiently.
 ///
 /// This has a specialized implementation of `RmpWrite`

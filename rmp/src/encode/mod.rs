@@ -109,10 +109,14 @@ mod sealed{
     #[cfg(feature = "std")]
     impl<T: ?Sized + std::io::Write> Sealed for T {}
     #[cfg(not(feature = "std"))]
+    impl<T: ?Sized + Sealed> Sealed for &mut T {}
+    #[cfg(not(feature = "std"))]
     impl Sealed for &mut [u8] {}
     #[cfg(not(feature = "std"))]
     impl Sealed for alloc::vec::Vec<u8> {}
     impl Sealed for super::ByteBuf {}
+    #[cfg(all(not(feature = "std"), feature = "nightly"))]
+    impl<'a> Sealed for core::io::BorrowedCursor<'a> {}
 }
 
 
@@ -192,6 +196,20 @@ impl<T: std::io::Write> RmpWrite for T {
     fn write_bytes(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
         self.write_all(buf)
     }
+}
+
+#[cfg(not(feature = "std"))]
+impl<T: RmpWrite> RmpWrite for &mut T {
+    type Error = T::Error;
+    
+    fn write_bytes(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+        RmpWrite::write_bytes(&mut **self, buf)
+    }
+
+    fn write_u8(&mut self, val: u8) -> Result<(), Self::Error> {
+        RmpWrite::write_u8(&mut **self, val)
+    }
+    
 }
 
 /// An error that can occur when attempting to write multi-byte MessagePack value.

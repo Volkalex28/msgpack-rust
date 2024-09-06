@@ -807,7 +807,7 @@ impl<'de, I, U> de::MapAccess<'de> for MapDeserializer<I, U>
     fn next_value_seed<T>(&mut self, seed: T) -> Result<T::Value, Self::Error>
         where T: DeserializeSeed<'de>
     {
-        match self.val.take() {
+        match Option::take(&mut self.val) {
             Some(val) => seed.deserialize(val),
             None => Err(de::Error::custom("value is missing")),
         }
